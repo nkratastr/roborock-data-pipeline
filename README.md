@@ -148,12 +148,27 @@ The pipeline creates these sheets:
 
 ### 5. Run the Pipeline
 
+#### Smart Sync (Recommended for Scheduled Runs)
+Only logs data if new cleaning detected. Run this twice a day.
+```bash
+python pipeline.py --mode smart
+```
+
+#### Scheduled Sync (For Docker/Background)
+Automatically runs smart sync every 12 hours (default).
+```bash
+python pipeline.py --mode schedule
+# Or with custom interval (in seconds):
+python pipeline.py --mode schedule --interval 21600  # 6 hours
+```
+
 #### Quick Status Check
 ```bash
 python pipeline.py --mode status
 ```
 
 #### Continuous Monitoring
+Real-time monitoring that captures cleanings as they complete.
 ```bash
 python pipeline.py --mode monitor
 ```
@@ -163,16 +178,56 @@ python pipeline.py --mode monitor
 python pipeline.py --mode log
 ```
 
+## Docker Deployment
+
+### Quick Start with Docker Compose
+
+```bash
+# Build and start container
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Manual Docker Build
+
+```bash
+# Build image
+docker build -t roborock-pipeline .
+
+# Run with environment variables
+docker run -d \
+  -e ROBOROCK_EMAIL=your-email@example.com \
+  -v $(pwd)/config:/app/config \
+  roborock-pipeline
+```
+
+### First-Time Setup
+
+1. Run the pipeline locally first to authenticate:
+   ```bash
+   python pipeline.py --mode smart
+   ```
+2. Enter the verification code when prompted
+3. The auth token is saved to `config/auth_token.json`
+4. Now Docker can run without needing verification codes
+
 ## Usage Flow
 
 1. **First Run**: The script will:
    - Send a verification code to your Roborock account email
-   - Create a new Google Spreadsheet
+   - Save authentication token for future runs
+   - Create/setup the Google Spreadsheet
    - Start monitoring your device
 
 2. **Subsequent Runs**: 
+   - Uses saved authentication token (no code needed!)
    - Uses saved spreadsheet ID
-   - Just needs Roborock verification code
+   - Tracks total_clean_count to detect new cleanings
 
 3. **Data Access**:
    - Open the Google Spreadsheet URL shown in console
