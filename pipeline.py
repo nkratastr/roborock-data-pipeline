@@ -12,6 +12,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+# Fix Windows asyncio compatibility issue with Python 3.8+
+# ProactorEventLoop doesn't support add_reader/add_writer needed by MQTT
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 

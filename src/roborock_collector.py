@@ -83,8 +83,9 @@ class RoborockDataCollector:
     
     def __init__(self, email: str):
         self.email = email
-        self.web_api = None
+        self.web_api = RoborockApiClient(username=email)  # Create once
         self.user_data = None
+        self.base_url = None
         self.device_manager = None
         self.devices = []
         self._is_authenticated = False
@@ -94,8 +95,9 @@ class RoborockDataCollector:
         Authenticate with Roborock cloud using verification code.
         """
         try:
-            self.web_api = RoborockApiClient(username=self.email)
+            # Use the same web_api instance that requested the code
             self.user_data = await self.web_api.code_login(code)
+            self.base_url = await self.web_api.base_url
             self._is_authenticated = True
             print(f"[INFO] Successfully authenticated as {self.email}")
             return True
@@ -108,7 +110,7 @@ class RoborockDataCollector:
         Request a verification code to be sent to the registered email.
         """
         try:
-            self.web_api = RoborockApiClient(username=self.email)
+            # Use existing web_api instance
             await self.web_api.request_code()
             print(f"[INFO] Verification code sent to {self.email}")
             return True
@@ -123,7 +125,11 @@ class RoborockDataCollector:
         if not self._is_authenticated:
             raise Exception("Not authenticated. Call authenticate() first.")
         
-        user_params = UserParams(username=self.email, user_data=self.user_data)
+        user_params = UserParams(
+            username=self.email, 
+            user_data=self.user_data,
+            base_url=self.base_url
+        )
         self.device_manager = await create_device_manager(user_params)
         self.devices = await self.device_manager.get_devices()
         
