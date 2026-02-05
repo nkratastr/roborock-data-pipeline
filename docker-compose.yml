@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  roborock-pipeline:
+    build: .
+    container_name: roborock-data-pipeline
+    restart: unless-stopped
+    
+    environment:
+      # Set your Roborock email here or use .env file
+      - ROBOROCK_EMAIL=${ROBOROCK_EMAIL}
+      # Sync interval in seconds (default: 43200 = 12 hours)
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-43200}
+    
+    volumes:
+      # Mount config directory for credentials and state persistence
+      - ./config:/app/config
+    
+    # Override command to use custom interval
+    command: >
+      python pipeline.py 
+      --mode schedule 
+      --interval ${SYNC_INTERVAL:-43200}
+
+    # Optional: check health
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

@@ -7,6 +7,8 @@ config/credentials.json
 config/spreadsheet_id.txt
 config/spreadsheet_id.txt.setup_done
 config/.needs_setup
+config/last_state.json
+config/auth_token.json
 
 # Python
 __pycache__/

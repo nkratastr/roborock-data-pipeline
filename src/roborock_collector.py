@@ -125,6 +125,8 @@ class RoborockDataCollector:
     Collects data from Roborock devices via the cloud API.
     """
     
+    AUTH_FILE = "config/auth_token.json"
+    
     def __init__(self, email: str):
         self.email = email
         self.web_api = RoborockApiClient(username=email)  # Create once
@@ -133,6 +135,67 @@ class RoborockDataCollector:
         self.device_manager = None
         self.devices = []
         self._is_authenticated = False
+    
+    def _save_auth(self):
+        """Save authentication tokens for reuse."""
+        import json
+        from pathlib import Path
+        
+        if self.user_data and self.base_url:
+            auth_data = {
+                'email': self.email,
+                'user_data': {
+                    'uid': self.user_data.uid,
+                    'token': self.user_data.token,
+                    'rruid': self.user_data.rruid,
+                    'region': self.user_data.region,
+                    'country_code': self.user_data.country_code,
+                },
+                'base_url': self.base_url
+            }
+            Path(self.AUTH_FILE).parent.mkdir(exist_ok=True)
+            with open(self.AUTH_FILE, 'w') as f:
+                json.dump(auth_data, f, indent=2)
+            print(f"[INFO] Saved authentication for future runs")
+    
+    def _load_auth(self) -> bool:
+        """Load saved authentication tokens."""
+        import json
+        from pathlib import Path
+        from roborock import UserData
+        
+        auth_path = Path(self.AUTH_FILE)
+        if not auth_path.exists():
+            return False
+        
+        try:
+            with open(auth_path, 'r') as f:
+                auth_data = json.load(f)
+            
+            if auth_data.get('email') != self.email:
+                print("[WARN] Saved auth is for different email, ignoring")
+                return False
+            
+            # Reconstruct UserData
+            ud = auth_data['user_data']
+            self.user_data = UserData(
+                uid=ud['uid'],
+                token=ud['token'],
+                rruid=ud['rruid'],
+                region=ud['region'],
+                country_code=ud['country_code']
+            )
+            self.base_url = auth_data['base_url']
+            self._is_authenticated = True
+            print(f"[INFO] Loaded saved authentication")
+            return True
+        except Exception as e:
+            print(f"[WARN] Could not load saved auth: {e}")
+            return False
+    
+    async def authenticate_with_saved_token(self) -> bool:
+        """Try to authenticate using saved token."""
+        return self._load_auth()
         
     async def authenticate(self, code: str) -> bool:
         """
@@ -144,6 +207,10 @@ class RoborockDataCollector:
             self.base_url = await self.web_api.base_url
             self._is_authenticated = True
             print(f"[INFO] Successfully authenticated as {self.email}")
+            
+            # Save auth for future runs
+            self._save_auth()
+            
             return True
         except Exception as e:
             print(f"[ERROR] Authentication failed: {e}")
