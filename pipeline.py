@@ -140,8 +140,19 @@ class CleaningMonitor:
 async def setup_and_authenticate():
     """
     Set up collector and authenticate with Roborock.
+    Tries saved token first, falls back to verification code.
     """
     collector = RoborockDataCollector(ROBOROCK_EMAIL)
+    
+    # Try saved authentication first
+    if await collector.authenticate_with_saved_token():
+        print("[AUTH] Using saved authentication token")
+        try:
+            await collector.discover_devices()
+            return collector
+        except Exception as e:
+            print(f"[WARN] Saved token expired or invalid: {e}")
+            # Fall through to request new code
     
     # Request verification code
     print(f"\n[SETUP] Sending verification code to {ROBOROCK_EMAIL}...")
@@ -347,15 +358,123 @@ async def log_single_cleaning():
             print(f"[SUCCESS] Logged: {record.clean_area_sqm}m² in {record.clean_time_minutes}min")
 
 
+async def smart_sync():
+    """
+    Smart sync - only logs if new cleaning detected since last run.
+    Uses total_clean_count to detect new cleanings.
+    """
+    from src.state_manager import StateManager
+    
+    print("\n[SMART SYNC] Checking for new cleanings...")
+    
+    state_manager = StateManager()
+    
+    collector = await setup_and_authenticate()
+    if not collector:
+        return
+    
+    sheets_client = setup_sheets()
+    if not sheets_client:
+        print("[ERROR] Google Sheets not configured")
+        return
+    
+    for device in collector.devices:
+        # Get clean summary with total count
+        clean_summary = await collector.get_clean_summary(device)
+        if not clean_summary:
+            print(f"[WARN] Could not get clean summary for {device.name}")
+            continue
+        
+        current_count = clean_summary.total_clean_count
+        device_name = device.name
+        
+        # Check if new cleaning occurred
+        if state_manager.has_new_cleaning(device_name, current_count):
+            new_cleanings = state_manager.get_new_cleaning_count(device_name, current_count)
+            print(f"[NEW] {new_cleanings} new cleaning(s) detected for {device_name}!")
+            
+            # Log current device state
+            status = await collector.get_device_status(device)
+            if status:
+                sheets_client.append_row("Device_Status", status.to_row())
+            
+            # Log clean summary
+            from datetime import datetime
+            summary_row = [
+                datetime.now().isoformat(),
+                device_name,
+                clean_summary.total_clean_count,
+                clean_summary.total_clean_area,
+                clean_summary.total_clean_time
+            ]
+            sheets_client.append_row("Clean_Summary", summary_row)
+            
+            # Log consumables
+            consumables = await collector.get_consumables(device)
+            if consumables:
+                consumables_row = [
+                    datetime.now().isoformat(),
+                    device_name,
+                    consumables.main_brush_life,
+                    consumables.side_brush_life,
+                    consumables.filter_life,
+                    consumables.sensor_dirty_time,
+                    consumables.mop_pad_life
+                ]
+                sheets_client.append_row("Consumables", consumables_row)
+            
+            # Update state
+            state_manager.update_device_state(
+                device_name,
+                current_count,
+                clean_summary.total_clean_area,
+                clean_summary.total_clean_time
+            )
+            
+            print(f"[SUCCESS] Logged data for {device_name}")
+        else:
+            print(f"[SKIP] No new cleanings for {device_name} (count: {current_count})")
+    
+    print("[SMART SYNC] Done!")
+
+
+async def schedule_sync(interval_seconds: int = 43200):
+    """
+    Run smart_sync on a schedule. Default: every 12 hours (43200 seconds).
+    Perfect for Docker deployment.
+    """
+    print(f"\n[SCHEDULE] Starting scheduled sync every {interval_seconds // 3600} hours")
+    print("[SCHEDULE] Press Ctrl+C to stop\n")
+    
+    while True:
+        try:
+            await smart_sync()
+            print(f"\n[SCHEDULE] Next sync in {interval_seconds // 3600} hours...")
+            await asyncio.sleep(interval_seconds)
+        except KeyboardInterrupt:
+            print("\n[SCHEDULE] Stopping...")
+            break
+        except Exception as e:
+            print(f"[ERROR] Schedule sync error: {e}")
+            # Wait before retrying
+            await asyncio.sleep(60)
+
+
 if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Roborock Q8 Data Pipeline")
     parser.add_argument(
         "--mode",
-        choices=["monitor", "status", "log"],
-        default="monitor",
-        help="Mode: monitor (continuous), status (one-time), log (manual log)"
+        choices=["monitor", "status", "log", "smart", "schedule"],
+        default="smart",
+        help="Mode: monitor (continuous), status (one-time), log (manual), smart (detect new), schedule (periodic smart)"
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=43200,
+        help="Interval in seconds for schedule mode (default: 43200 = 12 hours)"
     )
     
     args = parser.parse_args()
@@ -366,3 +485,7 @@ if __name__ == "__main__":
         asyncio.run(quick_status())
     elif args.mode == "log":
         asyncio.run(log_single_cleaning())
+    elif args.mode == "smart":
+        asyncio.run(smart_sync())
+    elif args.mode == "schedule":
+        asyncio.run(schedule_sync(args.interval))
