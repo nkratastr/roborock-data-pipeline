@@ -180,11 +180,43 @@ def setup_sheets():
     
     # Check if we have an existing spreadsheet ID
     spreadsheet_id_file = Path("config/spreadsheet_id.txt")
+    needs_setup_file = Path("config/.needs_setup")
     
     if spreadsheet_id_file.exists():
         spreadsheet_id = spreadsheet_id_file.read_text().strip()
         print(f"[SETUP] Using existing spreadsheet: {spreadsheet_id}")
-        return GoogleSheetsClient(str(creds_path), spreadsheet_id)
+        client = GoogleSheetsClient(str(creds_path), spreadsheet_id)
+        
+        # Set up sheets if needed (first time or flag exists)
+        if needs_setup_file.exists() or not spreadsheet_id_file.with_suffix('.txt.setup_done').exists():
+            print("[SETUP] Setting up spreadsheet sheets...")
+            from src.roborock_collector import (
+                CLEANING_HISTORY_HEADERS, 
+                DEVICE_STATUS_HEADERS,
+                CLEAN_SUMMARY_HEADERS,
+                CONSUMABLES_HEADERS
+            )
+            
+            # Create sheets
+            for sheet_name in ["Cleaning_History", "Device_Status", "Clean_Summary", "Consumables", "Daily_Summary"]:
+                try:
+                    client.create_sheet(sheet_name)
+                except:
+                    pass  # Sheet might already exist
+            
+            # Write headers
+            client.write_headers("Cleaning_History", CLEANING_HISTORY_HEADERS)
+            client.write_headers("Device_Status", DEVICE_STATUS_HEADERS)
+            client.write_headers("Clean_Summary", CLEAN_SUMMARY_HEADERS)
+            client.write_headers("Consumables", CONSUMABLES_HEADERS)
+            client.write_headers("Daily_Summary", ["Date", "Total_Cleanings", "Total_Area_m2", "Total_Time_min", "Avg_Area_m2", "Avg_Time_min"])
+            
+            # Mark as setup complete
+            needs_setup_file.unlink(missing_ok=True)
+            spreadsheet_id_file.with_suffix('.txt.setup_done').touch()
+            print("[SETUP] Spreadsheet setup complete!")
+            
+        return client
     else:
         # Create new spreadsheet
         client = setup_roborock_spreadsheet(str(creds_path), SPREADSHEET_NAME)
@@ -192,6 +224,7 @@ def setup_sheets():
         # Save spreadsheet ID for future runs
         spreadsheet_id_file.parent.mkdir(exist_ok=True)
         spreadsheet_id_file.write_text(client.spreadsheet_id)
+        spreadsheet_id_file.with_suffix('.txt.setup_done').touch()
         
         return client
 

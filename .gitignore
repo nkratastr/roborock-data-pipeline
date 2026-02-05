@@ -5,6 +5,8 @@
 # Google credentials
 config/credentials.json
 config/spreadsheet_id.txt
+config/spreadsheet_id.txt.setup_done
+config/.needs_setup
 
 # Python
 __pycache__/
