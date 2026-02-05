@@ -252,18 +252,44 @@ async def quick_status():
     if not collector:
         return
     
-    statuses = await collector.get_all_device_statuses()
+    print("\n" + "=" * 50)
     
-    print("\n" + "=" * 40)
-    for status in statuses:
-        print(f"\nDevice: {status.device_name}")
-        print(f"  State: {status.state}")
-        print(f"  Battery: {status.battery}%")
-        print(f"  Clean Area: {status.clean_area} m²")
-        print(f"  Clean Time: {status.clean_time} min")
-        print(f"  Fan Power: {status.fan_power}")
-        print(f"  Mop Mode: {status.mop_mode}")
-    print("=" * 40)
+    for device in collector.devices:
+        # Get device status
+        status = await collector.get_device_status(device)
+        if status:
+            print(f"\nDevice: {status.device_name}")
+            print("-" * 40)
+            print(f"  State: {status.state}")
+            print(f"  Battery: {status.battery}%")
+            print(f"  Clean Area: {status.clean_area} m²")
+            print(f"  Clean Time: {status.clean_time} min")
+            print(f"  Fan Power: {status.fan_power}")
+            print(f"  Water Box Status: {status.water_box_status}")
+            print(f"  Water Box Mode: {status.water_box_mode}")
+            print(f"  Mop Mode: {status.mop_mode}")
+            if status.error_code:
+                print(f"  Error Code: {status.error_code}")
+        
+        # Get clean summary
+        clean_summary = await collector.get_clean_summary(device)
+        if clean_summary:
+            print("\n  [Clean Summary - Lifetime Stats]")
+            print(f"    Total Cleanings: {clean_summary.total_clean_count}")
+            print(f"    Total Area: {clean_summary.total_clean_area} m²")
+            print(f"    Total Time: {clean_summary.total_clean_time} min")
+        
+        # Get consumables
+        consumables = await collector.get_consumables(device)
+        if consumables:
+            print("\n  [Consumables - Work Time (hours)]")
+            print(f"    Main Brush: {consumables.main_brush_life}")
+            print(f"    Side Brush: {consumables.side_brush_life}")
+            print(f"    Filter: {consumables.filter_life}")
+            print(f"    Sensor: {consumables.sensor_dirty_time}")
+            print(f"    Mop Pad: {consumables.mop_pad_life}")
+    
+    print("\n" + "=" * 50)
 
 
 async def log_single_cleaning():

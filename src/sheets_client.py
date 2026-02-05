@@ -269,7 +269,12 @@ def setup_roborock_spreadsheet(
     Returns:
         Configured GoogleSheetsClient instance
     """
-    from src.roborock_collector import CLEANING_HISTORY_HEADERS, DEVICE_STATUS_HEADERS
+    from src.roborock_collector import (
+        CLEANING_HISTORY_HEADERS, 
+        DEVICE_STATUS_HEADERS,
+        CLEAN_SUMMARY_HEADERS,
+        CONSUMABLES_HEADERS
+    )
     
     client = GoogleSheetsClient(credentials_path)
     client.create_spreadsheet(spreadsheet_name)
@@ -281,6 +286,14 @@ def setup_roborock_spreadsheet(
     # Create Device Status sheet
     client.create_sheet("Device_Status")
     client.write_headers("Device_Status", DEVICE_STATUS_HEADERS)
+    
+    # Create Clean Summary sheet (lifetime stats)
+    client.create_sheet("Clean_Summary")
+    client.write_headers("Clean_Summary", CLEAN_SUMMARY_HEADERS)
+    
+    # Create Consumables sheet
+    client.create_sheet("Consumables")
+    client.write_headers("Consumables", CONSUMABLES_HEADERS)
     
     # Create Daily Summary sheet
     client.create_sheet("Daily_Summary")

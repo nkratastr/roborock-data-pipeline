@@ -56,6 +56,7 @@ class DeviceStatus:
     battery: int
     fan_power: Optional[str]
     water_box_status: Optional[int]
+    water_box_mode: Optional[int]
     mop_mode: Optional[str]
     error_code: Optional[int]
     clean_time: int
@@ -69,10 +70,53 @@ class DeviceStatus:
             self.battery,
             self.fan_power,
             self.water_box_status,
+            self.water_box_mode,
             self.mop_mode,
             self.error_code,
             self.clean_time,
             self.clean_area
+        ]
+
+
+@dataclass
+class CleanSummary:
+    """Data class for cleaning summary/history"""
+    timestamp: str
+    device_name: str
+    total_clean_time: int  # Total minutes cleaned ever
+    total_clean_area: float  # Total m² cleaned ever
+    total_clean_count: int  # Number of cleanings
+    
+    def to_row(self) -> List[Any]:
+        return [
+            self.timestamp,
+            self.device_name,
+            self.total_clean_time,
+            self.total_clean_area,
+            self.total_clean_count
+        ]
+
+
+@dataclass
+class Consumables:
+    """Data class for consumable status"""
+    timestamp: str
+    device_name: str
+    main_brush_life: Optional[int]  # Remaining hours
+    side_brush_life: Optional[int]
+    filter_life: Optional[int]
+    sensor_dirty_time: Optional[int]
+    mop_pad_life: Optional[int]
+    
+    def to_row(self) -> List[Any]:
+        return [
+            self.timestamp,
+            self.device_name,
+            self.main_brush_life,
+            self.side_brush_life,
+            self.filter_life,
+            self.sensor_dirty_time,
+            self.mop_pad_life
         ]
 
 
@@ -163,6 +207,7 @@ class RoborockDataCollector:
                 fan_power = fan_power.name
             
             water_box = getattr(status_trait, 'water_box_status', None)
+            water_box_mode = getattr(status_trait, 'water_box_mode', None)
             mop_mode = getattr(status_trait, 'mop_mode', None)
             if mop_mode and hasattr(mop_mode, 'name'):
                 mop_mode = mop_mode.name
@@ -183,6 +228,7 @@ class RoborockDataCollector:
                 battery=battery,
                 fan_power=str(fan_power) if fan_power else None,
                 water_box_status=water_box,
+                water_box_mode=water_box_mode,
                 mop_mode=str(mop_mode) if mop_mode else None,
                 error_code=error_code,
                 clean_time=clean_time,
@@ -204,6 +250,77 @@ class RoborockDataCollector:
                 statuses.append(status)
         return statuses
     
+    async def get_clean_summary(self, device) -> Optional[CleanSummary]:
+        """
+        Get cleaning summary/history for a device.
+        """
+        if not device.v1_properties:
+            print(f"[WARN] Device does not support V1 protocol")
+            return None
+        
+        try:
+            clean_summary_trait = device.v1_properties.clean_summary
+            await clean_summary_trait.refresh()
+            
+            device_name = getattr(device, 'name', 'Roborock Q8')
+            
+            total_time = getattr(clean_summary_trait, 'clean_time', 0) or 0
+            total_area = getattr(clean_summary_trait, 'clean_area', 0) or 0
+            total_count = getattr(clean_summary_trait, 'clean_count', 0) or 0
+            
+            # Convert area from cm² to m²
+            total_area_sqm = round(total_area / 10000, 2)
+            
+            return CleanSummary(
+                timestamp=datetime.now().isoformat(),
+                device_name=str(device_name),
+                total_clean_time=total_time,
+                total_clean_area=total_area_sqm,
+                total_clean_count=total_count
+            )
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to get clean summary: {e}")
+            return None
+    
+    async def get_consumables(self, device) -> Optional[Consumables]:
+        """
+        Get consumables status for a device.
+        """
+        if not device.v1_properties:
+            print(f"[WARN] Device does not support V1 protocol")
+            return None
+        
+        try:
+            consumables_trait = device.v1_properties.consumables
+            await consumables_trait.refresh()
+            
+            device_name = getattr(device, 'name', 'Roborock Q8')
+            
+            main_brush = getattr(consumables_trait, 'main_brush_work_time', None)
+            side_brush = getattr(consumables_trait, 'side_brush_work_time', None)
+            filter_time = getattr(consumables_trait, 'filter_work_time', None)
+            sensor_dirty = getattr(consumables_trait, 'sensor_dirty_time', None)
+            
+            # Try different attribute names for mop pad
+            mop_pad = getattr(consumables_trait, 'cleaning_brush_work_time', None)
+            if mop_pad is None:
+                mop_pad = getattr(consumables_trait, 'mop_work_time', None)
+            
+            return Consumables(
+                timestamp=datetime.now().isoformat(),
+                device_name=str(device_name),
+                main_brush_life=main_brush,
+                side_brush_life=side_brush,
+                filter_life=filter_time,
+                sensor_dirty_time=sensor_dirty,
+                mop_pad_life=mop_pad
+            )
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to get consumables: {e}")
+            return None
+
     def is_cleaning(self, status: DeviceStatus) -> bool:
         """
         Check if device is currently cleaning.
@@ -270,8 +387,27 @@ DEVICE_STATUS_HEADERS = [
     "Battery (%)",
     "Fan Power",
     "Water Box Status",
+    "Water Box Mode",
     "Mop Mode",
     "Error Code",
     "Clean Time (min)",
     "Clean Area (m²)"
+]
+
+CLEAN_SUMMARY_HEADERS = [
+    "Timestamp",
+    "Device Name",
+    "Total Clean Time (min)",
+    "Total Clean Area (m²)",
+    "Total Clean Count"
+]
+
+CONSUMABLES_HEADERS = [
+    "Timestamp",
+    "Device Name",
+    "Main Brush (hours)",
+    "Side Brush (hours)",
+    "Filter (hours)",
+    "Sensor Dirty (hours)",
+    "Mop Pad (hours)"
 ]
