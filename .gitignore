@@ -1,0 +1,31 @@
+# Environment variables
+.env
+.env.local
+
+# Google credentials
+config/credentials.json
+config/spreadsheet_id.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
