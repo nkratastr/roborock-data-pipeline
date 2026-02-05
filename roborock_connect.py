@@ -4,10 +4,15 @@ This script allows you to connect to your Roborock Q8 device and read its data.
 """
 
 import asyncio
+import sys
 import os
 from dotenv import load_dotenv
 from roborock.web_api import RoborockApiClient
 from roborock.devices.device_manager import create_device_manager, UserParams
+
+# Fix Windows asyncio compatibility issue with Python 3.8+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Load environment variables
 load_dotenv()
