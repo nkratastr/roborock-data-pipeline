@@ -120,6 +120,33 @@ class Consumables:
         ]
 
 
+@dataclass
+class CleaningHistoryRecord:
+    """Data class for a historical cleaning record from the device"""
+    timestamp: str  # When this data was fetched
+    device_name: str
+    start_time: str  # When cleaning started
+    duration_minutes: float  # Duration in minutes
+    area_sqm: float
+    clean_mode: Optional[str]  # e.g., all_zone, segment, spot
+    clean_way: Optional[str]  # How started: app, schedule, remote
+    error_code: Optional[int]
+    task_status: Optional[str]  # Finish reason: finished_cleaning, etc.
+    
+    def to_row(self) -> List[Any]:
+        return [
+            self.timestamp,
+            self.device_name,
+            self.start_time,
+            self.duration_minutes,
+            self.area_sqm,
+            self.clean_mode,
+            self.clean_way,
+            self.error_code,
+            self.task_status
+        ]
+
+
 class RoborockDataCollector:
     """
     Collects data from Roborock devices via the cloud API.
@@ -142,15 +169,22 @@ class RoborockDataCollector:
         from pathlib import Path
         
         if self.user_data and self.base_url:
-            auth_data = {
-                'email': self.email,
-                'user_data': {
+            # Use as_dict() for proper serialization if available
+            if hasattr(self.user_data, 'as_dict'):
+                user_data_dict = self.user_data.as_dict()
+            else:
+                # Fallback to manual extraction
+                user_data_dict = {
                     'uid': self.user_data.uid,
                     'token': self.user_data.token,
                     'rruid': self.user_data.rruid,
                     'region': self.user_data.region,
-                    'country_code': self.user_data.country_code,
-                },
+                    'countrycode': self.user_data.countrycode,
+                }
+            
+            auth_data = {
+                'email': self.email,
+                'user_data': user_data_dict,
                 'base_url': self.base_url
             }
             Path(self.AUTH_FILE).parent.mkdir(exist_ok=True)
@@ -176,15 +210,26 @@ class RoborockDataCollector:
                 print("[WARN] Saved auth is for different email, ignoring")
                 return False
             
-            # Reconstruct UserData
+            # Reconstruct UserData using from_dict
             ud = auth_data['user_data']
-            self.user_data = UserData(
-                uid=ud['uid'],
-                token=ud['token'],
-                rruid=ud['rruid'],
-                region=ud['region'],
-                country_code=ud['country_code']
-            )
+            if hasattr(UserData, 'from_dict'):
+                self.user_data = UserData.from_dict(ud)
+            else:
+                # Fallback for older versions
+                from roborock import RRiot
+                rriot = None
+                if ud.get('rriot'):
+                    rriot = RRiot.from_dict(ud['rriot']) if hasattr(RRiot, 'from_dict') else None
+                
+                self.user_data = UserData(
+                    rriot=rriot,
+                    uid=ud.get('uid'),
+                    token=ud.get('token'),
+                    rruid=ud.get('rruid'),
+                    region=ud.get('region'),
+                    countrycode=ud.get('countrycode', ud.get('country_code'))
+                )
+            
             self.base_url = auth_data['base_url']
             self._is_authenticated = True
             print(f"[INFO] Loaded saved authentication")
@@ -388,6 +433,104 @@ class RoborockDataCollector:
             print(f"[ERROR] Failed to get consumables: {e}")
             return None
 
+    async def get_clean_records(self, device, limit: int = 10) -> List[CleaningHistoryRecord]:
+        """
+        Get historical cleaning records from the device.
+        
+        Args:
+            device: The Roborock device
+            limit: Maximum number of records to retrieve (default 10)
+        
+        Returns:
+            List of CleaningHistoryRecord objects
+        """
+        if not device.v1_properties:
+            print(f"[WARN] Device does not support V1 protocol")
+            return []
+        
+        try:
+            clean_summary_trait = device.v1_properties.clean_summary
+            await clean_summary_trait.refresh()
+            
+            device_name = getattr(device, 'name', 'Roborock Q8')
+            records = []
+            
+            # Get the records list from the trait
+            record_ids = getattr(clean_summary_trait, 'records', []) or []
+            
+            # Limit the number of records to fetch
+            record_ids = record_ids[:limit]
+            
+            for record_id in record_ids:
+                try:
+                    # Fetch detailed record
+                    record_detail = await clean_summary_trait.get_clean_record(record_id)
+                    
+                    if record_detail:
+                        # Extract start time - use begin_datetime
+                        start_time = getattr(record_detail, 'begin_datetime', None)
+                        if start_time:
+                            start_time_str = start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time)
+                        else:
+                            # Fallback to begin timestamp
+                            begin_ts = getattr(record_detail, 'begin', None)
+                            start_time_str = str(begin_ts) if begin_ts else 'Unknown'
+                        
+                        # Duration is in seconds, convert to minutes
+                        duration_seconds = getattr(record_detail, 'duration', 0) or 0
+                        duration_minutes = round(duration_seconds / 60, 1)
+                        
+                        # Area - use square_meter_area (already in m²)
+                        area = getattr(record_detail, 'square_meter_area', None)
+                        if area is None:
+                            # Fallback to area in cm² and convert
+                            area_cm2 = getattr(record_detail, 'area', 0) or 0
+                            area = round(area_cm2 / 10000, 2)
+                        
+                        # Clean type
+                        clean_type = getattr(record_detail, 'clean_type', None)
+                        clean_type_str = str(clean_type.name) if clean_type and hasattr(clean_type, 'name') else str(clean_type) if clean_type else None
+                        
+                        # Start type (how cleaning was started)
+                        start_type = getattr(record_detail, 'start_type', None)
+                        start_type_str = str(start_type.name) if start_type and hasattr(start_type, 'name') else str(start_type) if start_type else None
+                        
+                        # Error code
+                        error_code = getattr(record_detail, 'error', None)
+                        
+                        # Finish reason
+                        finish_reason = getattr(record_detail, 'finish_reason', None)
+                        finish_str = str(finish_reason.name) if finish_reason and hasattr(finish_reason, 'name') else str(finish_reason) if finish_reason else None
+                        
+                        records.append(CleaningHistoryRecord(
+                            timestamp=datetime.now().isoformat(),
+                            device_name=str(device_name),
+                            start_time=start_time_str,
+                            duration_minutes=duration_minutes,
+                            area_sqm=float(area) if area else 0.0,
+                            clean_mode=clean_type_str,
+                            clean_way=start_type_str,
+                            error_code=int(error_code) if error_code else None,
+                            task_status=finish_str
+                        ))
+                except Exception as e:
+                    print(f"[WARN] Failed to get record {record_id}: {e}")
+                    continue
+            
+            print(f"[INFO] Retrieved {len(records)} cleaning records")
+            return records
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to get clean records: {e}")
+            return []
+
+    async def get_last_clean_record(self, device) -> Optional[CleaningHistoryRecord]:
+        """
+        Get only the most recent cleaning record.
+        """
+        records = await self.get_clean_records(device, limit=1)
+        return records[0] if records else None
+
     def is_cleaning(self, status: DeviceStatus) -> bool:
         """
         Check if device is currently cleaning.
@@ -477,4 +620,16 @@ CONSUMABLES_HEADERS = [
     "Filter (hours)",
     "Sensor Dirty (hours)",
     "Mop Pad (hours)"
+]
+
+CLEANING_RECORDS_HEADERS = [
+    "Timestamp",
+    "Device Name",
+    "Start Time",
+    "Duration (min)",
+    "Area (m²)",
+    "Clean Mode",
+    "Clean Way",
+    "Error Code",
+    "Task Status"
 ]

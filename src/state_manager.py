@@ -72,3 +72,16 @@ class StateManager:
         """Get the number of new cleanings since last check."""
         last_count = self.get_last_clean_count(device_name)
         return max(0, current_count - last_count)
+    
+    def get_last_record_timestamp(self, device_name: str) -> Optional[str]:
+        """Get the timestamp of the last logged cleaning record."""
+        device_state = self.get_device_state(device_name)
+        return device_state.get('last_record_timestamp')
+    
+    def update_last_record_timestamp(self, device_name: str, timestamp: str):
+        """Update the last logged record timestamp."""
+        if device_name not in self.state:
+            self.state[device_name] = {}
+        self.state[device_name]['last_record_timestamp'] = timestamp
+        self.state[device_name]['last_updated'] = datetime.now().isoformat()
+        self._save()

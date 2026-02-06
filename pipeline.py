@@ -30,8 +30,10 @@ from src.roborock_collector import (
     RoborockDataCollector,
     CleaningRecord,
     DeviceStatus,
+    CleaningHistoryRecord,
     CLEANING_HISTORY_HEADERS,
-    DEVICE_STATUS_HEADERS
+    DEVICE_STATUS_HEADERS,
+    CLEANING_RECORDS_HEADERS
 )
 from src.sheets_client import GoogleSheetsClient, setup_roborock_spreadsheet
 
@@ -205,11 +207,12 @@ def setup_sheets():
                 CLEANING_HISTORY_HEADERS, 
                 DEVICE_STATUS_HEADERS,
                 CLEAN_SUMMARY_HEADERS,
-                CONSUMABLES_HEADERS
+                CONSUMABLES_HEADERS,
+                CLEANING_RECORDS_HEADERS
             )
             
             # Create sheets
-            for sheet_name in ["Cleaning_History", "Device_Status", "Clean_Summary", "Consumables", "Daily_Summary"]:
+            for sheet_name in ["Cleaning_History", "Device_Status", "Clean_Summary", "Consumables", "Daily_Summary", "Cleaning_Records"]:
                 try:
                     client.create_sheet(sheet_name)
                 except:
@@ -221,6 +224,7 @@ def setup_sheets():
             client.write_headers("Clean_Summary", CLEAN_SUMMARY_HEADERS)
             client.write_headers("Consumables", CONSUMABLES_HEADERS)
             client.write_headers("Daily_Summary", ["Date", "Total_Cleanings", "Total_Area_m2", "Total_Time_min", "Avg_Area_m2", "Avg_Time_min"])
+            client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
             
             # Mark as setup complete
             needs_setup_file.unlink(missing_ok=True)
@@ -460,21 +464,212 @@ async def schedule_sync(interval_seconds: int = 43200):
             await asyncio.sleep(60)
 
 
+async def fetch_cleaning_history(limit: int = 10):
+    """
+    Fetch historical cleaning records from device and log to Google Sheets.
+    
+    Args:
+        limit: Maximum number of records to fetch (default 10)
+    """
+    print(f"\n[HISTORY] Fetching last {limit} cleaning records...")
+    
+    collector = await setup_and_authenticate()
+    if not collector:
+        return
+    
+    sheets_client = setup_sheets()
+    if not sheets_client:
+        print("[ERROR] Google Sheets not configured")
+        return
+    
+    # Ensure the Cleaning_Records sheet exists with headers
+    try:
+        from src.roborock_collector import CLEANING_RECORDS_HEADERS
+        sheets_client.create_sheet("Cleaning_Records")
+        sheets_client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
+    except:
+        pass  # Sheet might already exist
+    
+    for device in collector.devices:
+        device_name = getattr(device, 'name', 'Roborock Q8')
+        print(f"\n[INFO] Fetching records for {device_name}...")
+        
+        records = await collector.get_clean_records(device, limit=limit)
+        
+        if not records:
+            print(f"[WARN] No cleaning records found for {device_name}")
+            continue
+        
+        print(f"[INFO] Found {len(records)} cleaning records")
+        
+        # Log each record to Google Sheets
+        for record in records:
+            try:
+                sheets_client.append_row("Cleaning_Records", record.to_row())
+            except Exception as e:
+                print(f"[ERROR] Failed to log record: {e}")
+        
+        print(f"[SUCCESS] Logged {len(records)} cleaning records for {device_name}")
+        
+        # Display the records
+        print(f"\n{'=' * 60}")
+        print(f"CLEANING HISTORY - {device_name}")
+        print(f"{'=' * 60}")
+        
+        for i, record in enumerate(records, 1):
+            print(f"\n[{i}] {record.start_time}")
+            print(f"    Duration: {record.duration_minutes} min")
+            print(f"    Area: {record.area_sqm} m²")
+            if record.clean_mode:
+                print(f"    Mode: {record.clean_mode}")
+            if record.clean_way:
+                print(f"    Method: {record.clean_way}")
+            if record.error_code:
+                print(f"    Error: {record.error_code}")
+            if record.task_status:
+                print(f"    Status: {record.task_status}")
+        
+        print(f"\n{'=' * 60}")
+    
+    print("\n[HISTORY] Done!")
+
+
+async def sync_new_records():
+    """
+    Check for new cleaning records and log only new ones to Google Sheets.
+    Uses state manager to track what's been logged.
+    """
+    from src.state_manager import StateManager
+    from src.roborock_collector import CLEANING_RECORDS_HEADERS
+    
+    print("\n[SYNC] Checking for new cleaning records...")
+    
+    collector = await setup_and_authenticate()
+    if not collector:
+        return False
+    
+    sheets_client = setup_sheets()
+    if not sheets_client:
+        print("[ERROR] Google Sheets not configured")
+        return False
+    
+    state_manager = StateManager()
+    
+    # Ensure the Cleaning_Records sheet exists
+    try:
+        sheets_client.create_sheet("Cleaning_Records")
+        sheets_client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
+    except:
+        pass
+    
+    new_records_found = False
+    
+    for device in collector.devices:
+        device_name = getattr(device, 'name', 'Roborock Q8')
+        
+        # Get the last logged record timestamp
+        last_timestamp = state_manager.get_last_record_timestamp(device_name)
+        
+        # Fetch recent records (limit to 5 to avoid re-logging too many)
+        records = await collector.get_clean_records(device, limit=5)
+        
+        if not records:
+            print(f"[INFO] No records found for {device_name}")
+            continue
+        
+        # Filter to only new records
+        new_records = []
+        for record in records:
+            # If no previous timestamp, only log the latest one
+            if last_timestamp is None:
+                new_records = [records[0]]  # Just the most recent
+                break
+            # Check if this record is newer than the last logged
+            if record.start_time > last_timestamp:
+                new_records.append(record)
+        
+        if not new_records:
+            print(f"[INFO] No new records for {device_name} (last: {last_timestamp})")
+            continue
+        
+        new_records_found = True
+        print(f"[INFO] Found {len(new_records)} new record(s) for {device_name}")
+        
+        # Log new records (oldest first to maintain order)
+        for record in reversed(new_records):
+            try:
+                sheets_client.append_row("Cleaning_Records", record.to_row())
+                print(f"  [NEW] {record.start_time}: {record.duration_minutes}min, {record.area_sqm}m²")
+            except Exception as e:
+                print(f"  [ERROR] Failed to log: {e}")
+        
+        # Update the last timestamp to the most recent record
+        state_manager.update_last_record_timestamp(device_name, records[0].start_time)
+    
+    return new_records_found
+
+
+async def schedule_record_sync(interval_seconds: int = 3600):
+    """
+    Run sync_new_records on a schedule. Default: every 1 hour (3600 seconds).
+    Perfect for Docker deployment to continuously log new cleaning records.
+    """
+    from datetime import datetime
+    
+    hours = interval_seconds / 3600
+    print(f"\n{'=' * 60}")
+    print("     ROBOROCK CLEANING RECORD SYNC")
+    print(f"{'=' * 60}")
+    print(f"[SCHEDULE] Checking for new records every {hours:.1f} hour(s)")
+    print("[SCHEDULE] Press Ctrl+C to stop\n")
+    
+    run_count = 0
+    
+    while True:
+        try:
+            run_count += 1
+            print(f"\n[RUN #{run_count}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            found_new = await sync_new_records()
+            
+            if found_new:
+                print("[SCHEDULE] New records logged to Google Sheets!")
+            else:
+                print("[SCHEDULE] No new records found")
+            
+            print(f"[SCHEDULE] Next check in {hours:.1f} hour(s)...")
+            await asyncio.sleep(interval_seconds)
+            
+        except KeyboardInterrupt:
+            print("\n[SCHEDULE] Stopping...")
+            break
+        except Exception as e:
+            print(f"[ERROR] Sync error: {e}")
+            # Wait before retrying
+            await asyncio.sleep(60)
+
+
 if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Roborock Q8 Data Pipeline")
     parser.add_argument(
         "--mode",
-        choices=["monitor", "status", "log", "smart", "schedule"],
+        choices=["monitor", "status", "log", "smart", "schedule", "history", "record_sync"],
         default="smart",
-        help="Mode: monitor (continuous), status (one-time), log (manual), smart (detect new), schedule (periodic smart)"
+        help="Mode: monitor (continuous), status (one-time), log (manual), smart (detect new), schedule (periodic smart), history (fetch cleaning records), record_sync (hourly new record sync)"
     )
     parser.add_argument(
         "--interval",
         type=int,
-        default=43200,
-        help="Interval in seconds for schedule mode (default: 43200 = 12 hours)"
+        default=3600,
+        help="Interval in seconds for schedule/record_sync mode (default: 3600 = 1 hour)"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of cleaning records to fetch in history mode (default: 10)"
     )
     
     args = parser.parse_args()
@@ -489,3 +684,7 @@ if __name__ == "__main__":
         asyncio.run(smart_sync())
     elif args.mode == "schedule":
         asyncio.run(schedule_sync(args.interval))
+    elif args.mode == "history":
+        asyncio.run(fetch_cleaning_history(args.limit))
+    elif args.mode == "record_sync":
+        asyncio.run(schedule_record_sync(args.interval))
