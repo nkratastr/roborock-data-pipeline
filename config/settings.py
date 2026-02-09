@@ -18,6 +18,8 @@ if not ROBOROCK_EMAIL:
 # Google Sheets Settings
 GOOGLE_SHEETS_CREDENTIALS_FILE = "config/credentials.json"
 SPREADSHEET_NAME = "Roborock_Q8_Data"
+GOOGLE_SHEETS_ENABLED = os.getenv("GOOGLE_SHEETS_ENABLED", "true").lower() in ("true", "1", "yes")
+GOOGLE_SHEETS_SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "")
 
 # Sheet names for different data types
 SHEETS = {

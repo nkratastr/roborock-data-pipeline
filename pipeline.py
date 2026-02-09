@@ -24,7 +24,9 @@ from config.settings import (
     ROBOROCK_EMAIL,
     GOOGLE_SHEETS_CREDENTIALS_FILE,
     SPREADSHEET_NAME,
-    POLLING_INTERVAL_SECONDS
+    POLLING_INTERVAL_SECONDS,
+    GOOGLE_SHEETS_ENABLED,
+    GOOGLE_SHEETS_SPREADSHEET_ID
 )
 from src.roborock_collector import (
     RoborockDataCollector,
@@ -38,6 +40,55 @@ from src.roborock_collector import (
 from src.sheets_client import GoogleSheetsClient, setup_roborock_spreadsheet
 
 
+def display_last_cleaning(record):
+    """
+    Display a cleaning record on screen in a formatted box.
+    Works with CleaningRecord, CleaningHistoryRecord, or a raw row list.
+    """
+    print()
+    print("+" + "=" * 46 + "+")
+    print("|{:^46s}|".format("LAST CLEANING RECORD"))
+    print("+" + "-" * 46 + "+")
+
+    if hasattr(record, 'device_name'):
+        # CleaningRecord
+        print("|  Device:    {:<33s}|".format(str(record.device_name or "Unknown")))
+        print("|  Date:      {:<33s}|".format(str(getattr(record, 'timestamp', '')[:19])))
+        print("|  Duration:  {:<33s}|".format(f"{record.clean_time_minutes} min"))
+        print("|  Area:      {:<33s}|".format(f"{record.clean_area_sqm} m2"))
+        if hasattr(record, 'fan_power') and record.fan_power:
+            print("|  Fan Power: {:<33s}|".format(str(record.fan_power)))
+        if hasattr(record, 'mop_mode') and record.mop_mode:
+            print("|  Mop Mode:  {:<33s}|".format(str(record.mop_mode)))
+        if hasattr(record, 'state') and record.state:
+            print("|  Status:    {:<33s}|".format(str(record.state)))
+        if hasattr(record, 'error_code') and record.error_code:
+            print("|  Error:     {:<33s}|".format(str(record.error_code)))
+    elif hasattr(record, 'start_time'):
+        # CleaningHistoryRecord
+        print("|  Device:    {:<33s}|".format(str(getattr(record, 'device_name', 'Unknown'))))
+        print("|  Date:      {:<33s}|".format(str(record.start_time[:19])))
+        print("|  Duration:  {:<33s}|".format(f"{record.duration_minutes} min"))
+        print("|  Area:      {:<33s}|".format(f"{record.area_sqm} m2"))
+        if record.clean_mode:
+            print("|  Mode:      {:<33s}|".format(str(record.clean_mode)))
+        if record.clean_way:
+            print("|  Method:    {:<33s}|".format(str(record.clean_way)))
+        if record.task_status:
+            print("|  Status:    {:<33s}|".format(str(record.task_status)))
+        if record.error_code:
+            print("|  Error:     {:<33s}|".format(str(record.error_code)))
+    elif isinstance(record, (list, tuple)):
+        # Raw row data
+        labels = ["Timestamp", "Device", "Value 1", "Value 2", "Value 3"]
+        for i, val in enumerate(record):
+            label = labels[i] if i < len(labels) else f"Field {i+1}"
+            print("|  {:<10s}: {:<32s}|".format(label, str(val)[:32]))
+
+    print("+" + "=" * 46 + "+")
+    print()
+
+
 class CleaningMonitor:
     """
     Monitors Roborock device and logs cleaning sessions.
@@ -46,7 +97,7 @@ class CleaningMonitor:
     def __init__(
         self,
         collector: RoborockDataCollector,
-        sheets_client: GoogleSheetsClient
+        sheets_client: GoogleSheetsClient = None
     ):
         self.collector = collector
         self.sheets_client = sheets_client
@@ -132,11 +183,17 @@ class CleaningMonitor:
             error_code=final_status.error_code
         )
         
-        try:
-            self.sheets_client.append_row("Cleaning_History", record.to_row())
-            print(f"[SUCCESS] Logged cleaning: {record.clean_area_sqm}m² in {record.clean_time_minutes}min")
-        except Exception as e:
-            print(f"[ERROR] Failed to log to sheets: {e}")
+        if self.sheets_client:
+            try:
+                self.sheets_client.append_row("Cleaning_History", record.to_row())
+                print(f"[SUCCESS] Logged cleaning to Google Sheets: {record.clean_area_sqm}m² in {record.clean_time_minutes}min")
+            except Exception as e:
+                print(f"[WARN] Google Sheets write failed: {e}")
+                print("[INFO] Displaying cleaning record on screen instead:")
+                display_last_cleaning(record)
+        else:
+            print("[INFO] Google Sheets not available — displaying on screen:")
+            display_last_cleaning(record)
 
 
 async def setup_and_authenticate():
@@ -177,71 +234,129 @@ async def setup_and_authenticate():
 def setup_sheets():
     """
     Set up Google Sheets client.
+    If credentials are missing, prompts the user interactively.
+    If Google Sheets is disabled via env, returns None.
     """
+    # Check if Google Sheets is disabled via environment variable
+    if not GOOGLE_SHEETS_ENABLED:
+        print("[SETUP] Google Sheets is disabled (GOOGLE_SHEETS_ENABLED=false)")
+        print("[INFO] Cleaning data will be displayed on screen only")
+        return None
+
     creds_path = Path(GOOGLE_SHEETS_CREDENTIALS_FILE)
-    
+
     if not creds_path.exists():
         print(f"\n[SETUP] Google Sheets credentials not found at: {creds_path}")
-        print("[SETUP] Please follow these steps:")
-        print("  1. Go to https://console.cloud.google.com/")
-        print("  2. Create a new project (or select existing)")
-        print("  3. Enable 'Google Sheets API'")
-        print("  4. Create Service Account credentials")
-        print("  5. Download JSON key file")
-        print(f"  6. Save it as: {creds_path.absolute()}")
-        return None
-    
-    # Check if we have an existing spreadsheet ID
+        print("\nWhat would you like to do?")
+        print("  1. Enter the path to your credentials.json file")
+        print("  2. Continue without Google Sheets (display mode only)")
+        print()
+
+        choice = input("Enter your choice (1-2): ").strip()
+
+        if choice == "1":
+            custom_path = input("Enter the full path to your credentials.json: ").strip()
+            custom_path = Path(custom_path)
+            if custom_path.exists():
+                # Copy credentials to expected location
+                import shutil
+                creds_path.parent.mkdir(exist_ok=True)
+                shutil.copy2(str(custom_path), str(creds_path))
+                print(f"[SUCCESS] Credentials copied to {creds_path}")
+            else:
+                print(f"[ERROR] File not found: {custom_path}")
+                print("[INFO] Continuing without Google Sheets")
+                return None
+        else:
+            print("[INFO] Continuing without Google Sheets — data will display on screen")
+            return None
+
+    # Try to initialize the Google Sheets client
     spreadsheet_id_file = Path("config/spreadsheet_id.txt")
     needs_setup_file = Path("config/.needs_setup")
-    
-    if spreadsheet_id_file.exists():
-        spreadsheet_id = spreadsheet_id_file.read_text().strip()
-        print(f"[SETUP] Using existing spreadsheet: {spreadsheet_id}")
-        client = GoogleSheetsClient(str(creds_path), spreadsheet_id)
-        
-        # Set up sheets if needed (first time or flag exists)
-        if needs_setup_file.exists() or not spreadsheet_id_file.with_suffix('.txt.setup_done').exists():
-            print("[SETUP] Setting up spreadsheet sheets...")
-            from src.roborock_collector import (
-                CLEANING_HISTORY_HEADERS, 
-                DEVICE_STATUS_HEADERS,
-                CLEAN_SUMMARY_HEADERS,
-                CONSUMABLES_HEADERS,
-                CLEANING_RECORDS_HEADERS
-            )
-            
-            # Create sheets
-            for sheet_name in ["Cleaning_History", "Device_Status", "Clean_Summary", "Consumables", "Daily_Summary", "Cleaning_Records"]:
-                try:
-                    client.create_sheet(sheet_name)
-                except:
-                    pass  # Sheet might already exist
-            
-            # Write headers
-            client.write_headers("Cleaning_History", CLEANING_HISTORY_HEADERS)
-            client.write_headers("Device_Status", DEVICE_STATUS_HEADERS)
-            client.write_headers("Clean_Summary", CLEAN_SUMMARY_HEADERS)
-            client.write_headers("Consumables", CONSUMABLES_HEADERS)
-            client.write_headers("Daily_Summary", ["Date", "Total_Cleanings", "Total_Area_m2", "Total_Time_min", "Avg_Area_m2", "Avg_Time_min"])
-            client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
-            
-            # Mark as setup complete
-            needs_setup_file.unlink(missing_ok=True)
-            spreadsheet_id_file.with_suffix('.txt.setup_done').touch()
-            print("[SETUP] Spreadsheet setup complete!")
-            
-        return client
-    else:
-        # Create new spreadsheet
-        client = setup_roborock_spreadsheet(str(creds_path), SPREADSHEET_NAME)
-        
-        # Save spreadsheet ID for future runs
-        spreadsheet_id_file.parent.mkdir(exist_ok=True)
-        spreadsheet_id_file.write_text(client.spreadsheet_id)
-        spreadsheet_id_file.with_suffix('.txt.setup_done').touch()
-        
-        return client
+
+    try:
+        if spreadsheet_id_file.exists():
+            spreadsheet_id = spreadsheet_id_file.read_text().strip()
+            print(f"[SETUP] Using existing spreadsheet: {spreadsheet_id}")
+            client = GoogleSheetsClient(str(creds_path), spreadsheet_id)
+
+            # Set up sheets if needed (first time or flag exists)
+            if needs_setup_file.exists() or not spreadsheet_id_file.with_suffix('.txt.setup_done').exists():
+                print("[SETUP] Setting up spreadsheet sheets...")
+                from src.roborock_collector import (
+                    CLEANING_HISTORY_HEADERS,
+                    DEVICE_STATUS_HEADERS,
+                    CLEAN_SUMMARY_HEADERS,
+                    CONSUMABLES_HEADERS,
+                    CLEANING_RECORDS_HEADERS
+                )
+
+                # Create sheets
+                for sheet_name in ["Cleaning_History", "Device_Status", "Clean_Summary", "Consumables", "Daily_Summary", "Cleaning_Records"]:
+                    try:
+                        client.create_sheet(sheet_name)
+                    except:
+                        pass  # Sheet might already exist
+
+                # Write headers
+                client.write_headers("Cleaning_History", CLEANING_HISTORY_HEADERS)
+                client.write_headers("Device_Status", DEVICE_STATUS_HEADERS)
+                client.write_headers("Clean_Summary", CLEAN_SUMMARY_HEADERS)
+                client.write_headers("Consumables", CONSUMABLES_HEADERS)
+                client.write_headers("Daily_Summary", ["Date", "Total_Cleanings", "Total_Area_m2", "Total_Time_min", "Avg_Area_m2", "Avg_Time_min"])
+                client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
+
+                # Mark as setup complete
+                needs_setup_file.unlink(missing_ok=True)
+                spreadsheet_id_file.with_suffix('.txt.setup_done').touch()
+                print("[SETUP] Spreadsheet setup complete!")
+
+            return client
+
+        elif GOOGLE_SHEETS_SPREADSHEET_ID:
+            # Use spreadsheet ID from environment variable
+            print(f"[SETUP] Using spreadsheet ID from environment: {GOOGLE_SHEETS_SPREADSHEET_ID}")
+            spreadsheet_id_file.parent.mkdir(exist_ok=True)
+            spreadsheet_id_file.write_text(GOOGLE_SHEETS_SPREADSHEET_ID)
+            client = GoogleSheetsClient(str(creds_path), GOOGLE_SHEETS_SPREADSHEET_ID)
+            return client
+
+        else:
+            # No spreadsheet ID — ask user
+            print("\n[SETUP] No spreadsheet ID found.")
+            print("  1. Enter your Google Sheets spreadsheet ID")
+            print("  2. Create a new spreadsheet automatically")
+            print("  3. Continue without Google Sheets (display mode only)")
+            print()
+
+            choice = input("Enter your choice (1-3): ").strip()
+
+            if choice == "1":
+                sid = input("Enter your spreadsheet ID: ").strip()
+                if sid:
+                    spreadsheet_id_file.parent.mkdir(exist_ok=True)
+                    spreadsheet_id_file.write_text(sid)
+                    client = GoogleSheetsClient(str(creds_path), sid)
+                    print(f"[SUCCESS] Spreadsheet ID saved: {sid}")
+                    return client
+                else:
+                    print("[WARN] No ID entered. Continuing without Google Sheets")
+                    return None
+            elif choice == "2":
+                client = setup_roborock_spreadsheet(str(creds_path), SPREADSHEET_NAME)
+                spreadsheet_id_file.parent.mkdir(exist_ok=True)
+                spreadsheet_id_file.write_text(client.spreadsheet_id)
+                spreadsheet_id_file.with_suffix('.txt.setup_done').touch()
+                return client
+            else:
+                print("[INFO] Continuing without Google Sheets — data will display on screen")
+                return None
+
+    except Exception as e:
+        print(f"\n[ERROR] Google Sheets setup failed: {e}")
+        print("[INFO] Continuing without Google Sheets — data will display on screen")
+        return None
 
 
 async def main():
@@ -267,27 +382,12 @@ async def main():
     
     # Start monitoring
     print("\n[3/3] Starting monitor...")
-    
-    if sheets_client:
-        monitor = CleaningMonitor(collector, sheets_client)
-        await monitor.monitor_loop()
-    else:
-        # Demo mode - just show status
-        print("\n[DEMO] Showing device status (no logging)")
-        while True:
-            try:
-                statuses = await collector.get_all_device_statuses()
-                for status in statuses:
-                    print(f"\n[STATUS] {status.device_name}:")
-                    print(f"  State: {status.state}")
-                    print(f"  Battery: {status.battery}%")
-                    print(f"  Clean Area: {status.clean_area}m²")
-                    print(f"  Clean Time: {status.clean_time}min")
-                
-                await asyncio.sleep(POLLING_INTERVAL_SECONDS)
-            except KeyboardInterrupt:
-                print("\n[EXIT] Goodbye!")
-                break
+
+    if not sheets_client:
+        print("[INFO] Running without Google Sheets — completed cleanings will display on screen")
+
+    monitor = CleaningMonitor(collector, sheets_client)
+    await monitor.monitor_loop()
 
 
 async def quick_status():
@@ -343,102 +443,132 @@ async def quick_status():
 async def log_single_cleaning():
     """
     Manually log a single cleaning session (useful for testing).
+    Falls back to screen display if Google Sheets is unavailable.
     """
     print("\n[MANUAL LOG] Logging current cleaning data...")
-    
+
     collector = await setup_and_authenticate()
     if not collector:
         return
-    
+
     sheets_client = setup_sheets()
     if not sheets_client:
-        print("[ERROR] Google Sheets not configured")
-        return
-    
+        print("[WARN] Google Sheets not configured — data will display on screen")
+
     for device in collector.devices:
         record = await collector.create_cleaning_record(device)
         if record:
-            sheets_client.append_row("Cleaning_History", record.to_row())
-            print(f"[SUCCESS] Logged: {record.clean_area_sqm}m² in {record.clean_time_minutes}min")
+            if sheets_client:
+                try:
+                    sheets_client.append_row("Cleaning_History", record.to_row())
+                    print(f"[SUCCESS] Logged to Google Sheets: {record.clean_area_sqm}m² in {record.clean_time_minutes}min")
+                except Exception as e:
+                    print(f"[WARN] Google Sheets write failed: {e}")
+                    display_last_cleaning(record)
+            else:
+                display_last_cleaning(record)
 
 
 async def smart_sync():
     """
     Smart sync - only logs if new cleaning detected since last run.
     Uses total_clean_count to detect new cleanings.
+    Falls back to screen display if Google Sheets is unavailable.
     """
     from src.state_manager import StateManager
-    
+
     print("\n[SMART SYNC] Checking for new cleanings...")
-    
+
     state_manager = StateManager()
-    
+
     collector = await setup_and_authenticate()
     if not collector:
         return
-    
+
     sheets_client = setup_sheets()
     if not sheets_client:
-        print("[ERROR] Google Sheets not configured")
-        return
-    
+        print("[WARN] Google Sheets not configured — new cleanings will display on screen")
+
+    sheets_failed = False
+
     for device in collector.devices:
         # Get clean summary with total count
         clean_summary = await collector.get_clean_summary(device)
         if not clean_summary:
             print(f"[WARN] Could not get clean summary for {device.name}")
             continue
-        
+
         current_count = clean_summary.total_clean_count
         device_name = device.name
-        
+
         # Check if new cleaning occurred
         if state_manager.has_new_cleaning(device_name, current_count):
             new_cleanings = state_manager.get_new_cleaning_count(device_name, current_count)
             print(f"[NEW] {new_cleanings} new cleaning(s) detected for {device_name}!")
-            
-            # Log current device state
-            status = await collector.get_device_status(device)
-            if status:
-                sheets_client.append_row("Device_Status", status.to_row())
-            
-            # Log clean summary
-            from datetime import datetime
-            summary_row = [
-                datetime.now().isoformat(),
-                device_name,
-                clean_summary.total_clean_count,
-                clean_summary.total_clean_area,
-                clean_summary.total_clean_time
-            ]
-            sheets_client.append_row("Clean_Summary", summary_row)
-            
-            # Log consumables
-            consumables = await collector.get_consumables(device)
-            if consumables:
-                consumables_row = [
-                    datetime.now().isoformat(),
-                    device_name,
-                    consumables.main_brush_life,
-                    consumables.side_brush_life,
-                    consumables.filter_life,
-                    consumables.sensor_dirty_time,
-                    consumables.mop_pad_life
-                ]
-                sheets_client.append_row("Consumables", consumables_row)
-            
-            # Update state
+
+            # Get the latest cleaning record for display fallback
+            latest_record = None
+            records = await collector.get_clean_records(device, limit=1)
+            if records:
+                latest_record = records[0]
+
+            if sheets_client and not sheets_failed:
+                try:
+                    # Log current device state
+                    status = await collector.get_device_status(device)
+                    if status:
+                        sheets_client.append_row("Device_Status", status.to_row())
+
+                    # Log clean summary
+                    summary_row = [
+                        datetime.now().isoformat(),
+                        device_name,
+                        clean_summary.total_clean_count,
+                        clean_summary.total_clean_area,
+                        clean_summary.total_clean_time
+                    ]
+                    sheets_client.append_row("Clean_Summary", summary_row)
+
+                    # Log consumables
+                    consumables = await collector.get_consumables(device)
+                    if consumables:
+                        consumables_row = [
+                            datetime.now().isoformat(),
+                            device_name,
+                            consumables.main_brush_life,
+                            consumables.side_brush_life,
+                            consumables.filter_life,
+                            consumables.sensor_dirty_time,
+                            consumables.mop_pad_life
+                        ]
+                        sheets_client.append_row("Consumables", consumables_row)
+
+                    print(f"[SUCCESS] Logged data to Google Sheets for {device_name}")
+                except Exception as e:
+                    print(f"[WARN] Google Sheets write failed: {e}")
+                    sheets_failed = True
+                    if latest_record:
+                        print("[INFO] Displaying last cleaning record on screen instead:")
+                        display_last_cleaning(latest_record)
+            else:
+                # No sheets client or sheets already failed — display on screen
+                if latest_record:
+                    display_last_cleaning(latest_record)
+                else:
+                    print(f"[INFO] {device_name}: {new_cleanings} new cleaning(s), "
+                          f"total area: {clean_summary.total_clean_area}m2, "
+                          f"total time: {clean_summary.total_clean_time}min")
+
+            # Update state regardless of sheets success
             state_manager.update_device_state(
                 device_name,
                 current_count,
                 clean_summary.total_clean_area,
                 clean_summary.total_clean_time
             )
-            
-            print(f"[SUCCESS] Logged data for {device_name}")
         else:
             print(f"[SKIP] No new cleanings for {device_name} (count: {current_count})")
-    
+
     print("[SMART SYNC] Done!")
 
 
@@ -467,59 +597,65 @@ async def schedule_sync(interval_seconds: int = 43200):
 async def fetch_cleaning_history(limit: int = 10):
     """
     Fetch historical cleaning records from device and log to Google Sheets.
-    
+    Falls back to screen display if Google Sheets is unavailable.
+
     Args:
         limit: Maximum number of records to fetch (default 10)
     """
     print(f"\n[HISTORY] Fetching last {limit} cleaning records...")
-    
+
     collector = await setup_and_authenticate()
     if not collector:
         return
-    
+
     sheets_client = setup_sheets()
     if not sheets_client:
-        print("[ERROR] Google Sheets not configured")
-        return
-    
+        print("[WARN] Google Sheets not configured — records will display on screen only")
+
     # Ensure the Cleaning_Records sheet exists with headers
-    try:
-        from src.roborock_collector import CLEANING_RECORDS_HEADERS
-        sheets_client.create_sheet("Cleaning_Records")
-        sheets_client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
-    except:
-        pass  # Sheet might already exist
-    
+    if sheets_client:
+        try:
+            from src.roborock_collector import CLEANING_RECORDS_HEADERS
+            sheets_client.create_sheet("Cleaning_Records")
+            sheets_client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
+        except:
+            pass  # Sheet might already exist
+
     for device in collector.devices:
         device_name = getattr(device, 'name', 'Roborock Q8')
         print(f"\n[INFO] Fetching records for {device_name}...")
-        
+
         records = await collector.get_clean_records(device, limit=limit)
-        
+
         if not records:
             print(f"[WARN] No cleaning records found for {device_name}")
             continue
-        
+
         print(f"[INFO] Found {len(records)} cleaning records")
-        
-        # Log each record to Google Sheets
-        for record in records:
+
+        # Try to log each record to Google Sheets
+        sheets_write_ok = False
+        if sheets_client:
             try:
-                sheets_client.append_row("Cleaning_Records", record.to_row())
+                for record in records:
+                    sheets_client.append_row("Cleaning_Records", record.to_row())
+                sheets_write_ok = True
+                print(f"[SUCCESS] Logged {len(records)} cleaning records to Google Sheets for {device_name}")
             except Exception as e:
-                print(f"[ERROR] Failed to log record: {e}")
-        
-        print(f"[SUCCESS] Logged {len(records)} cleaning records for {device_name}")
-        
-        # Display the records
+                print(f"[WARN] Google Sheets write failed: {e}")
+
+        # Always display the records on screen (and especially if Sheets failed)
+        if not sheets_write_ok:
+            print("[INFO] Displaying cleaning records on screen:")
+
         print(f"\n{'=' * 60}")
         print(f"CLEANING HISTORY - {device_name}")
         print(f"{'=' * 60}")
-        
+
         for i, record in enumerate(records, 1):
             print(f"\n[{i}] {record.start_time}")
             print(f"    Duration: {record.duration_minutes} min")
-            print(f"    Area: {record.area_sqm} m²")
+            print(f"    Area: {record.area_sqm} m2")
             if record.clean_mode:
                 print(f"    Mode: {record.clean_mode}")
             if record.clean_way:
@@ -528,9 +664,9 @@ async def fetch_cleaning_history(limit: int = 10):
                 print(f"    Error: {record.error_code}")
             if record.task_status:
                 print(f"    Status: {record.task_status}")
-        
+
         print(f"\n{'=' * 60}")
-    
+
     print("\n[HISTORY] Done!")
 
 
@@ -538,45 +674,46 @@ async def sync_new_records():
     """
     Check for new cleaning records and log only new ones to Google Sheets.
     Uses state manager to track what's been logged.
+    Falls back to screen display if Google Sheets is unavailable.
     """
     from src.state_manager import StateManager
     from src.roborock_collector import CLEANING_RECORDS_HEADERS
-    
+
     print("\n[SYNC] Checking for new cleaning records...")
-    
+
     collector = await setup_and_authenticate()
     if not collector:
         return False
-    
+
     sheets_client = setup_sheets()
     if not sheets_client:
-        print("[ERROR] Google Sheets not configured")
-        return False
-    
+        print("[WARN] Google Sheets not configured — new records will display on screen")
+
     state_manager = StateManager()
-    
+
     # Ensure the Cleaning_Records sheet exists
-    try:
-        sheets_client.create_sheet("Cleaning_Records")
-        sheets_client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
-    except:
-        pass
-    
+    if sheets_client:
+        try:
+            sheets_client.create_sheet("Cleaning_Records")
+            sheets_client.write_headers("Cleaning_Records", CLEANING_RECORDS_HEADERS)
+        except:
+            pass
+
     new_records_found = False
-    
+
     for device in collector.devices:
         device_name = getattr(device, 'name', 'Roborock Q8')
-        
+
         # Get the last logged record timestamp
         last_timestamp = state_manager.get_last_record_timestamp(device_name)
-        
+
         # Fetch recent records (limit to 5 to avoid re-logging too many)
         records = await collector.get_clean_records(device, limit=5)
-        
+
         if not records:
             print(f"[INFO] No records found for {device_name}")
             continue
-        
+
         # Filter to only new records
         new_records = []
         for record in records:
@@ -587,25 +724,31 @@ async def sync_new_records():
             # Check if this record is newer than the last logged
             if record.start_time > last_timestamp:
                 new_records.append(record)
-        
+
         if not new_records:
             print(f"[INFO] No new records for {device_name} (last: {last_timestamp})")
             continue
-        
+
         new_records_found = True
         print(f"[INFO] Found {len(new_records)} new record(s) for {device_name}")
-        
+
         # Log new records (oldest first to maintain order)
+        sheets_write_ok = True
         for record in reversed(new_records):
-            try:
-                sheets_client.append_row("Cleaning_Records", record.to_row())
-                print(f"  [NEW] {record.start_time}: {record.duration_minutes}min, {record.area_sqm}m²")
-            except Exception as e:
-                print(f"  [ERROR] Failed to log: {e}")
-        
+            if sheets_client and sheets_write_ok:
+                try:
+                    sheets_client.append_row("Cleaning_Records", record.to_row())
+                    print(f"  [NEW] {record.start_time}: {record.duration_minutes}min, {record.area_sqm}m2")
+                except Exception as e:
+                    print(f"  [WARN] Google Sheets write failed: {e}")
+                    sheets_write_ok = False
+                    display_last_cleaning(record)
+            else:
+                display_last_cleaning(record)
+
         # Update the last timestamp to the most recent record
         state_manager.update_last_record_timestamp(device_name, records[0].start_time)
-    
+
     return new_records_found
 
 
