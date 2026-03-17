@@ -2,6 +2,12 @@
 
 A data pipeline that collects cleaning metrics from your Roborock Q8 vacuum and stores them in Google Sheets for analysis.
 
+## Architecture
+
+![Component Architecture](docs/workflow_roborock.png)
+
+> **Data flow:** The pipeline runs inside Docker and communicates with the Roborock Cloud API (via MQTT/HTTPS) to fetch device data. All writes go to Google Sheets through the Google Sheets API. A local state file tracks the last clean count to avoid duplicate records.
+
 ## Features
 
 - **Automatic Data Collection**: Monitors your Roborock Q8 and logs cleaning sessions
@@ -15,12 +21,19 @@ A data pipeline that collects cleaning metrics from your Roborock Q8 vacuum and 
 Roborock_Q8/
 ├── config/
 │   ├── settings.py           # Configuration settings
+│   ├── last_state.json       # Tracks last clean count (auto-generated)
 │   └── credentials.json      # Google Sheets API credentials (you create this)
+├── docs/
+│   ├── workflow_roborock.png  # Component architecture diagram
+│   └── workflow.drawio       # Editable draw.io diagram
 ├── src/
 │   ├── roborock_collector.py # Roborock API data extraction
-│   └── sheets_client.py      # Google Sheets API integration  
+│   ├── sheets_client.py      # Google Sheets API integration
+│   └── state_manager.py      # Clean count & dedup tracking
 ├── pipeline.py               # Main data pipeline script
 ├── roborock_connect.py       # Simple connection test script
+├── Dockerfile                # Docker image definition
+├── docker-compose.yml        # Docker Compose config
 ├── requirements.txt          # Python dependencies
 └── README.md
 ```

@@ -1,0 +1,121 @@
+<mxfile host="app.diagrams.net" version="21.0.0" type="device">
+  <diagram name="Architecture" id="roborock-arch">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Roborock Q8 — Component Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="250" y="20" width="660" height="36" as="geometry" />
+        </mxCell>
+
+        <!-- ======================== -->
+        <!-- DOCKER CONTAINER (bg)    -->
+        <!-- ======================== -->
+        <mxCell id="docker_bg" value="Docker Container" style="swimlane;startSize=28;fillColor=#dae8fc;strokeColor=#0e7ac4;strokeWidth=2;dashed=1;dashPattern=8 4;fontSize=12;fontStyle=1;align=left;perimeterSpacing=0;" vertex="1" parent="1">
+          <mxGeometry x="270" y="70" width="630" height="500" as="geometry" />
+        </mxCell>
+
+        <!-- pipeline.py -->
+        <mxCell id="pipeline" value="&lt;b&gt;pipeline.py&lt;/b&gt;&#xa;CLI entry · 7 modes&#xa;(monitor, smart, status, log,&#xa;schedule, history, record_sync)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="455" y="130" width="220" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- roborock_collector.py -->
+        <mxCell id="collector" value="&lt;b&gt;roborock_collector.py&lt;/b&gt;&#xa;Auth + data fetching&#xa;Device status, history,&#xa;consumables" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="310" y="280" width="195" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- sheets_client.py -->
+        <mxCell id="sheets_client" value="&lt;b&gt;sheets_client.py&lt;/b&gt;&#xa;Google Sheets writes&#xa;Append rows, setup sheets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="635" y="280" width="195" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- state_manager.py -->
+        <mxCell id="state_mgr" value="&lt;b&gt;state_manager.py&lt;/b&gt;&#xa;Dedup via clean count&#xa;&amp; timestamp tracking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="455" y="420" width="195" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Config / Secrets -->
+        <mxCell id="config" value="&lt;b&gt;Config / Secrets&lt;/b&gt;&#xa;.env · settings.py&#xa;credentials.json&#xa;last_state.json" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="730" y="415" width="140" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- ======================== -->
+        <!-- EXTERNAL SYSTEMS         -->
+        <!-- ======================== -->
+
+        <!-- User -->
+        <mxCell id="user" value="&lt;b&gt;User&lt;/b&gt;&#xa;Terminal / Cron" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="455" y="20" width="220" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Roborock Cloud API -->
+        <mxCell id="roborock_api" value="&lt;b&gt;Roborock Cloud API&lt;/b&gt;&#xa;MQTT / HTTPS&#xa;(roborock.com)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="295" width="185" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- Google Sheets API -->
+        <mxCell id="google_api" value="&lt;b&gt;Google Sheets API&lt;/b&gt;&#xa;Service account / HTTPS&#xa;(googleapis.com)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="250" width="185" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- Google Spreadsheet -->
+        <mxCell id="spreadsheet" value="&lt;b&gt;Google Spreadsheet&lt;/b&gt;&#xa;Cleaning Records&#xa;Device Status · History" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="960" y="370" width="185" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- ======================== -->
+        <!-- EDGES                    -->
+        <!-- ======================== -->
+
+        <!-- User -> pipeline.py -->
+        <mxCell id="e1" value="runs" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" source="user" target="pipeline" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- pipeline -> collector -->
+        <mxCell id="e2" value="fetch data" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="pipeline" target="collector" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- pipeline -> sheets_client -->
+        <mxCell id="e3" value="write rows" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="pipeline" target="sheets_client" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- pipeline -> state_mgr -->
+        <mxCell id="e4" value="read / update" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="pipeline" target="state_mgr" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- collector <-> Roborock Cloud API -->
+        <mxCell id="e5" value="device data" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="collector" target="roborock_api" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- sheets_client -> Google Sheets API -->
+        <mxCell id="e6" value="append rows" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="sheets_client" target="google_api" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Google Sheets API -> Spreadsheet -->
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="google_api" target="spreadsheet" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- state_mgr -> config (dashed) -->
+        <mxCell id="e8" value="last_state.json" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" edge="1" source="state_mgr" target="config" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- sheets_client -> config (dashed) -->
+        <mxCell id="e9" value="credentials.json" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;dashed=1;" edge="1" source="sheets_client" target="config" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
